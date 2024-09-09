@@ -1,0 +1,435 @@
+---
+title: "情報科学3"
+subtitle: "Rによる分類の例"
+author: "柳樂 優太（1260404）"
+date: today
+execute: 
+  echo: true
+  warning: false
+  message: true
+format: 
+  pdf:
+    fig-width: 5
+    fig-height: 3
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    include-in-header:
+      - text: \setlength{\parindent}{1em}
+pdf-engine: lualatex
+documentclass: ltjsarticle 
+lang: ja
+---
+
+
+# 準備 {-}
+```{r global_option}
+#| include: false
+## PDF に出力する際は cairo を使用する
+if (knitr::is_latex_output()) {
+  knitr::opts_chunk$set(dev = "cairo_pdf")
+}
+```
+
+
+```{r}
+#| echo: false
+#| message: false
+pacman::p_load(tidyverse,       
+               palmerpenguins,  # データソース
+               caret,           # 混同行列, kNN 
+               MASS,            # LDA
+               nnet,            # 多項ロジスティック回帰
+               e1071,           # SVM
+               rpart,           # 決定木
+               randomForest,    # ランダムフォレスト
+               scales)
+## 図のなかで日本語を使えるようにする
+## 大学PCを利用：Windows を想定
+## フォントの設定はお好みで
+## （Unix/Linux ではIPAexフォントのインストールが必要かも）
+if (.Platform$OS.type == "windows") { 
+  if (require(fontregisterer)) {
+    my_font <- "Yu Gothic"
+  } else {
+    my_font <- "Japan1"
+  }
+} else if (capabilities("aqua")) {
+  my_font <- "HiraginoSans-W3"
+} else {
+  my_font <- "IPAexGothic"
+}
+
+theme_set(theme_gray(base_size = 9,
+                     base_family = my_font))
+```
+
+# palmerpenguins データ
+
+```{r}
+#今回はこのデータを使う
+data(penguins)
+```
+
+中身を確認しよう
+```{r}
+dim(penguins)
+
+# 行
+nrow(penguins)
+
+# 列
+ncol(penguins)
+
+# 変数名
+names(penguins)
+```
+
+データセットの基本情報を確認しよう
+
+
+```{r}
+#| echo: false
+glimpse(penguins)
+
+
+str(penguins)
+
+# 先頭部分
+head(penguins)
+
+#　しり
+tail(penguins, n = 3)
+
+# 基本
+summary(penguins)
+```
+
+
+
+# 問題の設定
+
+嘴の長さと厚みから，ペンギンを分類してみる
+
+```{r}
+with(penguins, table(species))
+```
+
+
+表記を日本語にし，欠損値を除去しよう（この欠損処理は，仮のものである）
+```{r}
+penguins_s1 <- penguins |> 
+  mutate(species = case_when(
+    species == "Adelie"    ~ 1L,
+    species == "Chinstrap" ~ 2L,
+    TRUE                   ~ 3L,
+  )) |> 
+  mutate(species = factor(species, 
+                          levels = 1:3,
+                          labels = c("アデリー", "ヒゲ", "ジェンツー"))) |> 
+  dplyr::select(species, bill_length_mm, bill_depth_mm) |> 
+  na.omit()
+```
+予測に使うふたつの変数(特徴量)と実際の種類(ラベル)の関係を図示する
+
+これが分類における正解になる
+```{r}
+p1 <- ggplot(data = penguins_s1,
+             aes(x = bill_length_mm,
+                 y = bill_depth_mm)) +
+  geom_point(aes(color = species,
+             shape = species)) + 
+  scale_color_brewer(palette = "Accent") +
+  labs(x = "嘴の長さ(mm)",
+       y = "嘴の厚み(mm)",
+       color = "ペンギンの種類",
+       shape = "ペンギンの種類")
+plot(p1)
+```
+
+予測に使うRのformalを用意する
+
+```{r}
+pgnf <- formula(species ~ bill_length_mm + bill_depth_mm)
+```
+
+分類の境界線を求める範囲のグリッドデータを用意する
+```{r}
+bill_len_lim <- range(penguins_s1$bill_length_mm) |> 
+  expand_range(mul = 0.05)
+
+bill_dep_lim <- range(penguins_s1$bill_depth_mm) |> 
+  expand_range(mul = 0.05)
+
+newdf <- expand_grid(
+  bill_length_mm = seq(bill_len_lim[1], bill_len_lim[2], length.out = 500),
+  bill_depth_mm = seq(bill_dep_lim[1], bill_dep_lim[2], length.out = 500)
+)
+
+glimpse(newdf, n = 5)
+```
+
+分類結果を上書きした図をプロットする関数を定義する
+```{r}
+decision_region <- function(pred_class, title = NULL) {
+  # pred_class には予測（分類）結果を数値で表したベクトルを渡す
+  df <- newdf  |>  
+    mutate(predicted = pred_class)
+  p <- p1 + 
+    geom_raster(data = df,
+                aes(fill = as.factor(predicted)),
+                alpha = 0.2,
+                show.legend = FALSE) +
+    geom_contour(data = df,
+                 aes(z = predicted),
+                 color = "gray") +
+    scale_fill_brewer(palette = "Accent") +
+    scale_x_continuous(limits = bill_len_lim, expand = c(0, 0)) +
+    scale_y_continuous(limits = bill_dep_lim, expand = c(0, 0)) +
+    ggtitle(title)
+  return(p)
+}
+```
+
+
+
+# LDA(線形判別分析)
+
+
+LDAでの分類には以下のコマンドを用いる
+```{r}
+classifier_lda <- lda(pgnf, data = penguins_s1)
+```
+
+分類がどれほどうまくいったのかを確認するために，混合行列を表示する
+```{r}
+pred_lda <- predict(classifier_lda)
+confusionMatrix(pred_lda$class,
+                reference = penguins_s1$species)
+```
+
+
+
+
+
+分類の境界線を表示する
+```{r}
+p_lda <- predict(classifier_lda,newdata = newdf)$class |> 
+  as.numeric() |> 
+  decision_region(title = "LDAによる分類")
+plot(p_lda)
+```
+
+# SVM(サポートベクタマシン)
+
+サポートベクタマシンによる分類を行う
+
+## 線形カーネル
+
+線形カーネルを用いてSVMで分類を行う
+
+```{r}
+svm_linear <- svm(pgnf,
+                  data = penguins_s1,
+                  kernel = "linear")
+```
+
+
+
+混合行列
+
+```{r}
+predict(svm_linear) |> 
+  confusionMatrix(reference = penguins_s1$species)
+```
+
+分類境界を可視化する関数が用意されている
+```{r}
+par(family = my_font)
+
+plot(svm_linear, data = penguins_s1)
+```
+
+
+
+
+縦軸と横軸が入れ替わっているので，ggplotで書き直す
+```{r}
+p_svm_linear <- predict(svm_linear, newdata = newdf) |> 
+  as.numeric() |> 
+  decision_region(title = "SVM(線形カーネル)による分類")
+plot(p_svm_linear)
+```
+
+## ガウスカーネル
+
+ガウスカーネルを使う
+
+- gamma = 0.5
+
+```{r}
+svm_rbf1 <- svm(pgnf,
+                data = penguins_s1,
+                kernel = "radial",
+                gamma = 0.5)
+```
+混合行列
+
+```{r}
+predict(svm_rbf1) |> 
+  confusionMatrix(reference = penguins_s1$species)
+```
+
+
+分類境界を図示する
+```{r}
+p_svm_rbf1 <- predict(svm_rbf1, newdata = newdf) |> 
+  as.numeric() |> 
+  decision_region(title = "SVM(ガウスアンカーネル)による分類：gamma = 0.5")
+plot(p_svm_rbf1)
+```
+
+
+- gamma = 10
+
+```{r}
+svm_rbf2 <- svm(pgnf,
+                data = penguins_s1,
+                kernel = "radial",
+                gamma = 10)  # 関数の複雑さを決めるパラメタ
+```
+
+
+
+混合行列
+
+
+```{r}
+predict(svm_rbf2) %>% 
+  confusionMatrix(reference = penguins_s1$species)
+```
+
+
+
+
+分類境界を図示する
+
+
+
+```{r}
+p_svm_rbf2 <- predict(svm_rbf2, newdata = newdf) %>% 
+  as.numeric() %>% 
+  decision_region(title = "SVM（ガウシアンカーネル）による分類: gamma = 10")
+plot(p_svm_rbf2)
+
+```
+
+
+複雑であれば良いということではない
+
+
+# 決定木
+
+```{r}
+classifier_tree <- rpart(pgnf, data = penguins_s1)
+```
+
+混合行列
+
+```{r}
+predict(classifier_tree,
+        type = "class") |> 
+  confusionMatrix(reference = penguins_s1$species)
+```
+
+
+
+境界線を分類する
+
+```{r}
+p_tree <- predict(classifier_tree,
+                  newdata = newdf,
+                  type = "class") |> 
+  as.numeric() |> 
+  decision_region(title = "決定木による分類")
+plot(p_tree)
+```
+
+# ランダムフォレスト
+
+```{r}
+classifier_rf <- randomForest(pgnf,
+                              data = penguins_s1,
+                              ntree = 50)
+```
+
+
+混合行列
+
+```{r}
+predict(classifier_rf) |> 
+  confusionMatrix(reference = penguins_s1$species)
+```
+
+分断面を図示する
+
+```{r}
+p_rf <- predict(classifier_rf, 
+                newdata = newdf,
+                type = "class") %>% 
+  as.numeric() %>% 
+  decision_region(title = "ランダムフォレストによる分類")
+plot(p_rf)
+```
+
+
+
+
+# kk近傍法による分類
+
+```{r}
+classifier_kNN <- knn3(pgnf,
+                      data = penguins_s1,
+                      k = 5)
+```
+
+
+混合行列
+
+```{r}
+predict(classifier_kNN,
+        newdata = penguins_s1,
+        type = "class") |> 
+  confusionMatrix(reference = penguins_s1$species)
+```
+
+
+分類境界を図示する
+```{r}
+p_kNN <- predict(classifier_kNN,
+                 newdata = newdf,
+                 type = "class") |> 
+  as.numeric() |> 
+  decision_region(title = "k近傍法による分類(k=5)")
+plot(p_kNN)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
