@@ -1,0 +1,68 @@
+---
+title: "情報科学3"
+subtitle: "サブ"
+author: "柳樂 優太（1260404）"
+date: today
+execute: 
+  echo: true
+  warning: false
+  message: true
+format: 
+  pdf:
+    fig-width: 5
+    fig-height: 3
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    include-in-header:
+      - text: \setlength{\parindent}{1em}
+pdf-engine: lualatex
+documentclass: ltjsarticle 
+lang: ja
+---
+
+
+# 準備 {-}
+```{r global_option}
+#| include: false
+## PDF に出力する際は cairo を使用する
+if (knitr::is_latex_output()) {
+  knitr::opts_chunk$set(dev = "cairo_pdf")
+}
+```
+
+
+```{r}
+#| echo: false
+#| message: false
+pacman::p_load(tidyverse,       
+               palmerpenguins,  # データソース
+               caret,           # 混同行列, kNN 
+               MASS,            # LDA
+               nnet,            # 多項ロジスティック回帰
+               e1071,           # SVM
+               rpart,           # 決定木
+               randomForest,    # ランダムフォレスト
+               scales)
+## 図のなかで日本語を使えるようにする
+## 大学PCを利用：Windows を想定
+## フォントの設定はお好みで
+## （Unix/Linux ではIPAexフォントのインストールが必要かも）
+if (.Platform$OS.type == "windows") { 
+  if (require(fontregisterer)) {
+    my_font <- "Yu Gothic"
+  } else {
+    my_font <- "Japan1"
+  }
+} else if (capabilities("aqua")) {
+  my_font <- "HiraginoSans-W3"
+} else {
+  my_font <- "IPAexGothic"
+}
+
+theme_set(theme_gray(base_size = 9,
+                     base_family = my_font))
+```
+
+
+
